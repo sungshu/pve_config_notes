@@ -66,8 +66,8 @@ chmod +x pve_config_notes.sh disk_monitor.sh
 # 套用全部優化（系統設定 + 硬碟監控介面）
 ./pve_config_notes.sh
 
-# 若機房有內部 NTP 伺服器，可指定：
-INTERNAL_NTP=172.21.210.50 ./pve_config_notes.sh
+# 若機房有內部 NTP 伺服器，可指定（IP 僅為範例，請換成實际位址）：
+INTERNAL_NTP=192.168.0.100 ./pve_config_notes.sh
 
 # 只還原第 6 步（Node.pm / pvemanagerlib.js / proxmoxlib.js）的介面修改
 ./pve_config_notes.sh restore
@@ -102,7 +102,7 @@ chmod +x disk_monitor.sh
 ## 文章說明
 
 1. 本專案涵蓋的部分參數（如內網 NTP 位址）需自行依環境調整，預設僅使用台灣公開
-   時間伺服器，不會在程式碼中寫死任何內部網路資訊。
+   時間伺服器，不會在程式碼中寫死任何內部網路資訊；文件中出現的 IP 目城为示例用途。
 2. 隨著 PVE 版本迭代，`Nodes.pm`／`pvemanagerlib.js` 的插入點字串（如
    `PVE::pvecfg::version_text()`）可能改変，執行前請先在測試節點驗證。
 3. PERC/MegaRAID 環境的判斷同時依賴 `smartctl --scan-open` 的裝置對應與型號關鍵字，

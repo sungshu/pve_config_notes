@@ -19,7 +19,8 @@
 #
 # 內網 NTP 伺服器（選用）：
 #   若你的機房有內部 NTP 伺服器，可在執行前設定環境變數，例如：
-#     INTERNAL_NTP=172.21.210.50 ./pve_config_notes.sh
+#     INTERNAL_NTP=192.168.0.100 ./pve_config_notes.sh
+#   （上方 IP 僅為範例，請換成你自己機房的實际位址）
 #   未設定時僅使用台灣公開時間伺服器（tick/tock.stdtime.gov.tw、tw.pool.ntp.org）。
 #
 # 作者: sungshu 手札筆記本 (https://sungshu.github.io/)
