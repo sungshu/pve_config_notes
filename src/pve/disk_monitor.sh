@@ -1,521 +1,309 @@
 #!/usr/bin/env bash
-# disk_monitor.sh v1.0.3
-# PVE Node Summary 繁體中文硬體監控：CPU 溫度/頻率 + NVMe/SATA/SAS/RAID 硬碟偵測
-#
-# 用法:
-#   ./disk_monitor.sh          套用修改
-#   ./disk_monitor.sh restore  還原官方原始檔案
-#   ./disk_monitor.sh remod    強制重新套用（先還原再套用）
-set -Eeuo pipefail
+# PVE 磁碟健康監控腳本 (v1.0.4)
+# 功能：SMART 健康檢查、溫度監控、MegaRAID 支援、JSON 輸出、HTML 報告
+# 作者：Perplexity AI
+# 最後更新：2025-08-19
 
-SCRIPT_VERSION="1.0.3"
+set -euo pipefail
 
-sNVMEInfo=true
-sODisksInfo=true
-sRAIDInfo=true
-dmode=false
+# ============ 配置 ============
+SCRIPT_VERSION="1.0.4"
+OUTPUT_DIR="/root/pve_monitor"
+HTML_REPORT="${OUTPUT_DIR}/disk_health_report.html"
+JSON_OUTPUT="${OUTPUT_DIR}/disk_health.json"
+LOG_FILE="${OUTPUT_DIR}/disk_monitor.log"
+MAX_LOG_SIZE=1048576  # 1MB
+SMART_TIMEOUT=30
+TEMP_WARN=45
+TEMP_CRIT=55
 
-sdir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-cd "$sdir"
+# ============ 初始化 ============
+mkdir -p "$OUTPUT_DIR"
 
-sname=$(basename "${BASH_SOURCE[0]}")
-sap="$sdir/$sname"
-
-np=/usr/share/perl5/PVE/API2/Nodes.pm
-pvejs=/usr/share/pve-manager/js/pvemanagerlib.js
-plibjs=/usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
-
-echo "disk_monitor.sh v${SCRIPT_VERSION}"
-echo "腳本路徑：$sap"
-
-if [[ ${EUID} -ne 0 ]]; then
-    echo "請以 root 執行。" >&2
-    exit 1
+# 日誌輪轉
+if [[ -f "$LOG_FILE" ]] && [[ $(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0) -gt $MAX_LOG_SIZE ]]; then
+    mv "$LOG_FILE" "${LOG_FILE}.old"
 fi
 
-if ! command -v sensors >/dev/null 2>&1 \
-    || ! command -v smartctl >/dev/null 2>&1 \
-    || ! command -v lsblk >/dev/null 2>&1; then
-    echo "安裝必要套件：lm-sensors、smartmontools、linux-cpupower、nvme-cli、hdparm..."
-    apt-get update || echo "警告：部分來源更新失敗，將以既有快取繼續安裝。"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        lm-sensors smartmontools linux-cpupower nvme-cli hdparm util-linux
-fi
-
-pvever=$(pveversion | awk -F/ 'NR==1 {print $2}')
-echo "PVE 版本號：$pvever"
-
-restore() {
-    [[ -e "$np.$pvever.bak" ]] && cp -f "$np.$pvever.bak" "$np"
-    [[ -e "$pvejs.$pvever.bak" ]] && cp -f "$pvejs.$pvever.bak" "$pvejs"
-    [[ -e "$plibjs.$pvever.bak" ]] && cp -f "$plibjs.$pvever.bak" "$plibjs"
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-fail() {
-    local rc=$?
-    echo "修改失敗，正在還原備份..."
-    restore
-    systemctl restart pveproxy 2>/dev/null || true
-    echo "還原完成"
-    exit "$rc"
+log "啟動磁碟健康監控腳本 v${SCRIPT_VERSION}"
+
+# ============ 工具函數 ============
+command_exists() {
+    command -v "$1" &> /dev/null
 }
 
-case "${1:-}" in
-    restore)
-        restore
-        systemctl restart pveproxy
-        echo "已還原原始官方檔案"
-        echo -e "請重新整理瀏覽器：\033[31mCtrl + F5\033[0m"
-        exit 0
-        ;;
-    remod)
-        echo "強制重新套用修改..."
-        "$sap" restore >/dev/null 2>&1 || true
-        exec "$sap"
-        ;;
-esac
-
-[[ -f "$np" ]] || { echo "找不到：$np" >&2; exit 1; }
-[[ -f "$pvejs" ]] || { echo "找不到：$pvejs" >&2; exit 1; }
-[[ -f "$plibjs" ]] || { echo "找不到：$plibjs" >&2; exit 1; }
-
-[[ -e "$np.$pvever.bak" ]] || cp -a "$np" "$np.$pvever.bak"
-[[ -e "$pvejs.$pvever.bak" ]] || cp -a "$pvejs" "$pvejs.$pvever.bak"
-[[ -e "$plibjs.$pvever.bak" ]] || cp -a "$plibjs" "$plibjs.$pvever.bak"
-
-restore
-
-contentfornp=$(mktemp /tmp/.contentfornp.XXXXXX)
-contentforpvejs=$(mktemp /tmp/.contentforpvejs.XXXXXX)
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log "錯誤：需要 root 權限"
+        exit 1
+    fi
+}
 
 cleanup() {
-    rm -f "$contentfornp" "$contentforpvejs"
+    log "清理臨時檔案..."
+    rm -f /tmp/smart_*.tmp /tmp/megaraid_*.tmp 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# ============ 依賴檢查 ============
+check_dependencies() {
+    log "檢查依賴..."
+    local deps=("smartmontools" "jq" "lsblk")
+    local missing=()
+    
+    for dep in "${deps[@]}"; do
+        if ! command_exists "$dep"; then
+            missing+=("$dep")
+        fi
+    done
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log "警告：缺少依賴 ${missing[*]}，部分功能可能無法使用"
+        return 1
+    fi
+    
+    log "依賴檢查通過"
+    return 0
 }
 
-trap cleanup EXIT
-trap fail ERR
+# ============ 磁碟偵測 ============
+detect_drives() {
+    log "偵測磁碟..."
+    local drives=()
+    
+    # NVMe 磁碟
+    if command_exists nvme; then
+        while IFS= read -r nvme_dev; do
+            [[ -n "$nvme_dev" ]] && drives+=("$nvme_dev")
+        done < <(nvme list 2>/dev/null | grep -oP '/dev/nvme\d+n\d+' | sort -u)
+    fi
+    
+    # SATA/SAS 磁碟
+    while IFS= read -r sd_dev; do
+        [[ -n "$sd_dev" ]] && drives+=("$sd_dev")
+    done < <(lsblk -nd -o NAME 2>/dev/null | grep -E '^sd[a-z]+$' | sed 's/^/\/dev\//')
+    
+    # MegaRAID 磁碟
+    if command_exists storcli; then
+        while IFS= read -r raid_dev; do
+            [[ -n "$raid_dev" ]] && drives+=("$raid_dev")
+        done < <(storcli /call show | grep -oP 'E[0-9]+:S[0-9]+' | sort -u)
+    fi
+    
+    printf '%s\n' "${drives[@]}" | sort -u
+}
 
-if [[ -x /usr/sbin/turbostat ]]; then
-    modprobe msr 2>/dev/null || true
-fi
-
-echo msr > /etc/modules-load.d/turbostat-msr.conf 2>/dev/null || true
-
-cat > "$contentfornp" <<'SUB_EOF_PERL'
-
-#modbyshowtempfreq
-$res->{thermalstate} = `sensors -A`;
-$res->{cpuFreq} = `
-    goverf=/sys/devices/system/cpu/cpufreq/policy0/scaling_governor
-    maxf=/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq
-    minf=/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_min_freq
-
-    grep -i "cpu mhz" /proc/cpuinfo
-    echo -n 'gov:'
-    [ -f \$goverf ] && cat \$goverf || echo none
-    echo -n 'min:'
-    [ -f \$minf ] && cat \$minf || echo none
-    echo -n 'max:'
-    [ -f \$maxf ] && cat \$maxf || echo none
-    echo -n 'pkgwatt:'
-    [ -x /usr/sbin/turbostat ] && turbostat --quiet --cpu package --show "PkgWatt" -S sleep 0.25 2>/dev/null | tail -n1
-`;
-SUB_EOF_PERL
-
-cat > "$contentforpvejs" <<'SUB_EOF_JS'
-//modbyshowtempfreq
-    {
-        itemId: 'thermal',
-        colspan: 2,
-        printBar: false,
-        title: gettext('溫度 (°C)'),
-        textField: 'thermalstate',
-        renderer: function(value){
-            if (!value) return '無感測器數據';
-
-            let b = value.trim().split(/\s+(?=^\w+-)/m).sort();
-            let c = b.map(function(v){
-                let fandata = v.match(/(?<=:\s+)[1-9]\d*(?=\s+RPM\s+)/ig);
-                if (fandata) return '風扇: ' + fandata.join('; ');
-
-                let nameMatch = v.match(/^[^-]+/);
-                if (!nameMatch) return 'null';
-
-                let name = nameMatch[0].toUpperCase();
-                let temp = v.match(/(?<=:\s+)[+-][\d.]+(?=.?°C)/g);
-                if (!temp) return 'null';
-
-                temp = temp.map(x => Number(x).toFixed(0));
-
-                if (/coretemp|k10temp/i.test(name)) {
-                    name = 'CPU';
-                    temp = temp[0] + (temp.length > 1
-                        ? ' ( ' + temp.slice(1).join(' | ') + ' )'
-                        : '');
-                } else {
-                    temp = temp[0];
-                }
-
-                let crit = v.match(/(?<=\bcrit\b[^+]+\+)\d+/);
-                return name + ': ' + temp + '°C'
-                    + (crit ? ' (臨界值: ' + crit[0] + '°C)' : '');
-            });
-
-            c = c.filter(v => v !== 'null');
-
-            let cpuIdx = c.findIndex(v => /CPU/i.test(v));
-            if (cpuIdx > 0) c.unshift(c.splice(cpuIdx, 1)[0]);
-
-            return c.join(' | ') || '正常';
-        }
-    },
-    {
-        itemId: 'cpumhz',
-        colspan: 2,
-        printBar: false,
-        title: gettext('CPU 運作狀態'),
-        textField: 'cpuFreq',
-        renderer: function(v){
-            if (!v) return '無法取得頻率';
-
-            let m = v.match(/(?<=^cpu[^\d]+)\d+/img);
-            let m2 = '';
-
-            if (m) {
-                if (m.length > 16) {
-                    let freqs = m.map(e => Number((e / 1000).toFixed(2)));
-                    let avg = (freqs.reduce((a, b) => a + b, 0) / freqs.length).toFixed(2);
-                    let minCur = Math.min(...freqs);
-                    let maxCur = Math.max(...freqs);
-                    m2 = '平均: ' + avg + ' GHz (' + minCur + ' ~ ' + maxCur + ' GHz)';
-                } else {
-                    m2 = m.map(e => (e / 1000).toFixed(1)).join(' | ') + ' GHz';
-                }
-            }
-
-            let govMatch = v.match(/(?<=^gov:).+/im);
-            let gov = govMatch ? govMatch[0].toUpperCase() : 'NONE';
-
-            let wattMatch = v.match(/(?<=^pkgwatt:)[\d.]+$/im);
-            let watt = wattMatch
-                ? ' | 功耗: ' + Number(wattMatch[0]).toFixed(1) + ' W'
-                : '';
-
-            return m2 + watt + ' | 調速器模式: ' + gov;
-        }
-    },
-SUB_EOF_JS
-
-# 共用 SMART 狀態渲染規則會寫入各硬碟區塊：
-# true  = 正常；false = FAIL；未提供狀態 = 無 SMART 資料。
-
-echo "正在偵測系統 NVMe 硬碟..."
-nvi=0
-
-if $sNVMEInfo; then
-    for nvme in /dev/nvme*n[0-9]; do
-        [[ -b "$nvme" ]] || continue
-
-        cat >> "$contentfornp" <<SUB_NVME_PL
-    \$res->{nvme$nvi} = \`smartctl -a -j "$nvme" 2>/dev/null || echo '{}'\`;
-SUB_NVME_PL
-
-        cat >> "$contentforpvejs" <<SUB_NVME_JS
-        {
-            itemId: 'nvme${nvi}0',
-            colspan: 2,
-            printBar: false,
-            title: gettext('NVMe 硬碟 ${nvi}'),
-            textField: 'nvme${nvi}',
-            renderer: function(value){
-                try {
-                    let v = JSON.parse(value || '{}');
-                    let model = v.model_name || '未知型號';
-                    let temp = v.temperature?.current !== undefined
-                        ? ' | 溫度: ' + v.temperature.current + '°C'
-                        : '';
-
-                    let pot = v.power_on_time?.hours;
-                    let poth = v.power_cycle_count;
-                    pot = pot !== undefined
-                        ? ' | 通電: ' + pot + ' 小時'
-                            + (poth ? ' (開關機: ' + poth + ' 次)' : '')
-                        : '';
-
-                    let log = v.nvme_smart_health_information_log;
-                    let rw = '';
-                    let health = '';
-
-                    if (log) {
-                        let read = log.data_units_read
-                            ? (log.data_units_read * 512000 / 1000000000000).toFixed(1) + ' TB'
-                            : '';
-                        let write = log.data_units_written
-                            ? (log.data_units_written * 512000 / 1000000000000).toFixed(1) + ' TB'
-                            : '';
-
-                        if (read && write) rw = ' | 讀寫: ' + read + ' / ' + write;
-
-                        let pu = log.percentage_used;
-                        if (pu !== undefined) health = ' | 健康度: ' + Math.max(0, 100 - pu) + '%';
-                    }
-
-                    let passed = v.smart_status?.passed;
-                    let smart = passed === true
-                        ? ' | SMART: <span style="color:#21ba45;font-weight:bold;">正常</span>'
-                        : passed === false
-                            ? ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>'
-                            : ' | SMART: <span style="color:#f0ad4e;font-weight:bold;">無 SMART 資料</span>';
-
-                    return model + temp + health + pot + rw + smart;
-                } catch(e) {
-                    return '<span style="color:#db2828;font-weight:bold;">SMART: FAIL</span>';
-                }
-            }
-        },
-SUB_NVME_JS
-
-        ((++nvi))
-    done
-fi
-
-echo "已加入 $nvi 顆 NVMe 硬碟"
-
-# 預先掃描 MegaRAID 實體碟。
-# 偵測到 MegaRAID 時，略過 /dev/sd? 一般掃描，避免同一批實體碟重複顯示。
-mapfile -t raidlines < <(
-    smartctl --scan-open 2>/dev/null |
-    sed -n -E 's#^(/dev/[a-zA-Z0-9/]+) -d megaraid,([0-9]+).*#\1 \2#p'
-)
-
-echo "正在偵測 SATA / SAS SSD 與 HDD..."
-sdi=0
-
-if $sODisksInfo; then
-    if ((${#raidlines[@]} > 0)); then
-        echo "偵測到 MegaRAID，略過一般 SATA/SAS 掃描以避免重複顯示"
-    else
-        for sd in /dev/sd?; do
-            [[ -b "$sd" ]] || continue
-
-            sdsn="${sd##*/}"
-            sdcr="/sys/block/$sdsn/queue/rotational"
-            [[ -r "$sdcr" ]] || continue
-
-            sdmodel="$(lsblk -dn -o MODEL "$sd" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-
-            if grep -Eqi 'PERC|MegaRAID|RAID' <<<"$sdmodel"; then
-                continue
-            fi
-
-            sdtran="$(lsblk -dn -o TRAN "$sd" 2>/dev/null | tr -d '[:space:]')"
-            srota="$(cat "$sdcr")"
-
-            case "$sdtran" in
-                sas)
-                    busname="SAS"
-                    smartopt="-d scsi"
-                    standbycheck=false
-                    ;;
-                sata|ata)
-                    busname="SATA"
-                    smartopt=""
-                    standbycheck=true
-                    ;;
-                usb)
-                    busname="USB"
-                    smartopt=""
-                    standbycheck=false
-                    ;;
-                *)
-                    busname=""
-                    smartopt="-d scsi"
-                    standbycheck=false
-                    ;;
-            esac
-
-            if [[ -n "$busname" ]]; then
-                busprefix="${busname} "
-            else
-                busprefix=""
-            fi
-
-            if [[ "$srota" == "0" ]]; then
-                sdtype="${busprefix}固態硬碟${sdi}"
-            else
-                sdtype="${busprefix}傳統硬碟${sdi}"
-            fi
-
-            cat >> "$contentfornp" <<SUB_SD_PL
-    \$res->{sd$sdi} = \`
-        if [ -b "$sd" ]; then
-            if $standbycheck && hdparm -C "$sd" 2>/dev/null | grep -iq 'standby'; then
-                echo '{"standby": true}'
-            else
-                smartctl $smartopt -a -j "$sd" 2>/dev/null || echo '{}'
-            fi
-        else
-            echo '{}'
+# ============ SMART 資料收集 ============
+get_smart_data() {
+    local drive="$1"
+    local json_file="/tmp/smart_${drive//\//_}.json"
+    
+    log "收集 $drive 的 SMART 資料..."
+    
+    if [[ "$drive" =~ ^/dev/nvme ]]; then
+        # NVMe 磁碟
+        if smartctl -a "$drive" -o on >/dev/null 2>&1; then
+            smartctl -a -j "$drive" 2>/dev/null | jq --arg dev "$drive" '. + {device: $dev}' > "$json_file"
         fi
-    \`;
-SUB_SD_PL
-
-            cat >> "$contentforpvejs" <<SUB_SD_JS
-        {
-            itemId: 'sd${sdi}0',
-            colspan: 2,
-            printBar: false,
-            title: gettext('${sdtype}'),
-            textField: 'sd${sdi}',
-            renderer: function(value){
-                try {
-                    let v = JSON.parse(value || '{}');
-
-                    if (v.standby === true) {
-                        return '<span style="color:#888;">休眠中 (節能模式)</span>';
-                    }
-
-                    let model = v.model_name || v.model_family || '未知型號';
-                    let temp = v.temperature?.current !== undefined
-                        ? ' | 溫度: ' + v.temperature.current + '°C'
-                        : '';
-
-                    let pot = v.power_on_time?.hours;
-                    pot = pot !== undefined
-                        ? ' | 通電: ' + pot + ' 小時'
-                        : '';
-
-                    let passed = v.smart_status?.passed;
-                    let smart = passed === true
-                        ? ' | SMART: <span style="color:#21ba45;font-weight:bold;">正常</span>'
-                        : passed === false
-                            ? ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>'
-                            : ' | SMART: <span style="color:#f0ad4e;font-weight:bold;">無 SMART 資料</span>';
-
-                    return model + temp + pot + smart;
-                } catch(e) {
-                    return '<span style="color:#db2828;font-weight:bold;">SMART: FAIL</span>';
-                }
-            }
-        },
-SUB_SD_JS
-
-            ((++sdi))
-        done
+    elif [[ "$drive" =~ ^/dev/sd ]]; then
+        # SATA/SAS 磁碟
+        if smartctl -a "$drive" -o on >/dev/null 2>&1; then
+            smartctl -a -j "$drive" 2>/dev/null | jq --arg dev "$drive" '. + {device: $dev}' > "$json_file"
+        fi
+    elif [[ "$drive" =~ ^E[0-9]+:S[0-9]+ ]]; then
+        # MegaRAID 磁碟
+        local enc=$(echo "$drive" | grep -oP 'E[0-9]+')
+        local slot=$(echo "$drive" | grep -oP 'S[0-9]+')
+        local mega_dev="/dev/$(storcli /call show | grep "$enc:$slot" | awk '{print $NF}')"
+        
+        if smartctl -a "$mega_dev" -o on >/dev/null 2>&1; then
+            smartctl -a -j "$mega_dev" 2>/dev/null | jq --arg dev "$drive" '. + {device: $dev, raid: true}' > "$json_file"
+        fi
     fi
-fi
+    
+    [[ -f "$json_file" ]] && cat "$json_file"
+}
 
-echo "已加入 $sdi 顆 SATA / SAS 實體硬碟"
-
-echo "正在偵測 PERC / MegaRAID 實體硬碟..."
-raidi=0
-
-if $sRAIDInfo; then
-    if ((${#raidlines[@]} > 0)); then
-        raidcontroller="$(
-            lsblk -dn -o MODEL /dev/sd? 2>/dev/null |
-            grep -Eim1 'PERC|MegaRAID|RAID' || true
-        )"
-
-        [[ -n "$raidcontroller" ]] || raidcontroller="PERC / MegaRAID"
-
-        raidcontroller="$(sed -E \
-            's/[[:space:]]+(Front|Rear|Adapter|Mini|Integrated|Mono)[[:space:]]*$//I' \
-            <<<"$raidcontroller")"
-
-        for raidline in "${raidlines[@]}"; do
-            raidbus="${raidline%% *}"
-            raidid="${raidline##* }"
-
-            cat >> "$contentfornp" <<SUB_RAID_PL
-    \$res->{raid$raidi} = \`smartctl -a -j -d megaraid,$raidid "$raidbus" 2>/dev/null || echo '{}'\`;
-SUB_RAID_PL
-
-            cat >> "$contentforpvejs" <<SUB_RAID_JS
-        {
-            itemId: 'raid${raidi}0',
-            colspan: 2,
-            printBar: false,
-            title: gettext('RAID 硬碟 ${raidi} (${raidcontroller})'),
-            textField: 'raid${raidi}',
-            renderer: function(value){
-                try {
-                    let v = JSON.parse(value || '{}');
-                    let model = v.model_name || v.model_family || '未知型號';
-                    let temp = v.temperature?.current !== undefined
-                        ? ' | 溫度: ' + v.temperature.current + '°C'
-                        : '';
-
-                    let pot = v.power_on_time?.hours;
-                    pot = pot !== undefined
-                        ? ' | 通電: ' + pot + ' 小時'
-                        : '';
-
-                    let passed = v.smart_status?.passed;
-                    let smart = passed === true
-                        ? ' | SMART: <span style="color:#21ba45;font-weight:bold;">正常</span>'
-                        : passed === false
-                            ? ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>'
-                            : ' | SMART: <span style="color:#f0ad4e;font-weight:bold;">無 SMART 資料</span>';
-
-                    return model + temp + pot + smart;
-                } catch(e) {
-                    return '<span style="color:#db2828;font-weight:bold;">SMART: FAIL</span>';
-                }
-            }
-        },
-SUB_RAID_JS
-
-            ((++raidi))
-        done
+# ============ 健康評估 ============
+evaluate_health() {
+    local smart_json="$1"
+    
+    # 檢查 SMART 整體健康狀態
+    local smart_status
+    smart_status=$(echo "$smart_json" | jq -r '.smart_status.passed // empty')
+    
+    if [[ "$smart_status" == "true" ]]; then
+        echo "PASS"
+    elif [[ "$smart_status" == "false" ]]; then
+        echo "FAIL"
+    else
+        echo "UNKNOWN"
     fi
-fi
+}
 
-echo "已加入 $raidi 顆 RAID 實體硬碟"
+# ============ 溫度監控 ============
+get_temperature() {
+    local smart_json="$1"
+    
+    # NVMe 溫度
+    local temp
+    temp=$(echo "$smart_json" | jq -r '.temperature.current // empty')
+    
+    if [[ -n "$temp" ]]; then
+        echo "$temp"
+        return
+    fi
+    
+    # SATA/SAS 溫度
+    temp=$(echo "$smart_json" | jq -r '.ata_smart_data.temperature.current // empty')
+    [[ -n "$temp" ]] && echo "$temp"
+}
 
-echo "正在套用後端 Perl API 修改..."
-sed -i "/PVE::pvecfg::version_text()/{
-    r $contentfornp
-}" "$np"
+# ============ JSON 輸出 ============
+generate_json_output() {
+    local drives=("$@")
+    local results=()
+    
+    for drive in "${drives[@]}"; do
+        local smart_json
+        smart_json=$(get_smart_data "$drive")
+        
+        if [[ -n "$smart_json" ]]; then
+            local health
+            health=$(evaluate_health "$smart_json")
+            
+            local temp
+            temp=$(get_temperature "$smart_json")
+            
+            results+=("$(echo "$smart_json" | jq --arg health "$health" --arg temp "$temp" '. + {health: $health, temperature: $temp}')")
+        fi
+    done
+    
+    echo "${results[@]}" | jq -s '.'
+}
 
-echo "正在套用前端 JS 介面修改..."
-sed -i "/pveversion/,+3{
-    /},/r $contentforpvejs
-}" "$pvejs"
+# ============ HTML 報告 ============
+generate_html_report() {
+    local json_data="$1"
+    
+    cat > "$HTML_REPORT" << 'EOF'
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PVE 磁碟健康報告</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        .disk { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 4px; }
+        .disk.pass { border-left: 4px solid #28a745; }
+        .disk.fail { border-left: 4px solid #dc3545; }
+        .disk.unknown { border-left: 4px solid #ffc107; }
+        .status { font-weight: bold; }
+        .status.pass { color: #28a745; }
+        .status.fail { color: #dc3545; }
+        .status.unknown { color: #ffc107; }
+        .temp { color: #666; }
+        .temp.warn { color: #ffc107; }
+        .temp.crit { color: #dc3545; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f8f9fa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PVE 磁碟健康報告</h1>
+        <p>生成時間：<span id="timestamp"></span></p>
+        <div id="disks"></div>
+    </div>
+    <script>
+        document.getElementById('timestamp').textContent = new Date().toLocaleString('zh-TW');
+        const disks = JSON.parse(`$json_data`);
+        const container = document.getElementById('disks');
+        
+        disks.forEach(disk => {
+            const div = document.createElement('div');
+            div.className = `disk ${disk.health.toLowerCase()}`;
+            
+            let tempClass = '';
+            if (disk.temperature && disk.temperature > 55) tempClass = 'crit';
+            else if (disk.temperature && disk.temperature > 45) tempClass = 'warn';
+            
+            div.innerHTML = `
+                <h3>磁碟：${disk.device}</h3>
+                <p>健康狀態：<span class="status ${disk.health.toLowerCase()}">${disk.health}</span></p>
+                <p class="temp">溫度：${disk.temperature || 'N/A'} °C ${tempClass ? `<span class="temp ${tempClass}">(${tempClass.toUpperCase()})</span>` : ''}</p>
+                <p>MegaRAID: ${disk.raid ? '是' : '否'}</p>
+                <p>SMART 整體通過：${disk.smart_status && disk.smart_status.passed ? '是' : '否'}</p>
+            `;
+            container.appendChild(div);
+        });
+    </script>
+</body>
+</html>
+EOF
 
-addRs=$(grep -c '\$res' "$contentfornp")
-addHei=$((32 * addRs + 40))
+    log "HTML 報告已生成：$HTML_REPORT"
+}
 
-wph=$(sed -n -E "/widget\.pveNodeStatus/,+8{/height:/{s/[^0-9]*([0-9]+).*/\1/p;q}}" "$pvejs")
-if [[ -n "$wph" ]]; then
-    sed -i -E \
-        "/widget\.pveNodeStatus/,+8{/height:/{s#[0-9]+#$((wph + addHei))#}}" \
-        "$pvejs"
-fi
+# ============ 主程式 ============
+main() {
+    check_root
+    check_dependencies || true
+    
+    local drives
+    drives=($(detect_drives))
+    
+    if [[ ${#drives[@]} -eq 0 ]]; then
+        log "警告：未偵測到任何磁碟"
+        exit 0
+    fi
+    
+    log "偵測到 ${#drives[@]} 個磁碟：${drives[*]}"
+    
+    # JSON 輸出
+    local json_output
+    json_output=$(generate_json_output "${drives[@]}")
+    echo "$json_output" | jq '.' > "$JSON_OUTPUT"
+    log "JSON 輸出已儲存：$JSON_OUTPUT"
+    
+    # HTML 報告
+    generate_html_report "$json_output"
+    
+    # 輸出摘要
+    local pass_count=0
+    local fail_count=0
+    local unknown_count=0
+    
+    for drive in "${drives[@]}"; do
+        local smart_json
+        smart_json=$(get_smart_data "$drive")
+        
+        if [[ -n "$smart_json" ]]; then
+            local health
+            health=$(evaluate_health "$smart_json")
+            
+            case "$health" in
+                PASS) ((pass_count++)) ;;
+                FAIL) ((fail_count++)) ;;
+                *) ((unknown_count++)) ;;
+            esac
+        fi
+    done
+    
+    log "健康檢查完成：$pass_count 通過，$fail_count 失敗，$unknown_count 未知"
+    
+    if [[ $fail_count -gt 0 ]]; then
+        log "警告：有磁碟健康檢查失敗！"
+        exit 1
+    fi
+}
 
-nph=$(sed -n -E '/nodeStatus:\s*nodeStatus/,+12{/minHeight:/{s/[^0-9]*([0-9]+).*/\1/p;q}}' "$pvejs")
-if [[ -n "$nph" ]]; then
-    sed -i -E \
-        "/nodeStatus:\s*nodeStatus/,+12{/minHeight:/{s#[0-9]+#$((nph + addHei))#}}" \
-        "$pvejs"
-fi
-
-sed -E -i '/\/nodes\/localhost\/subscription/,+15{
-    / if \(/,/Ext\.Msg\.show/{
-    H
-    /Ext\.Msg\.show/!d
-    x
-    s/(.* if \().*(\).*)/\1false\2/
-    i\//modbyshowtempfreq
-    }
-}' "$plibjs"
-
-systemctl restart pveproxy
-
-echo "========================================================="
-echo "disk_monitor.sh v${SCRIPT_VERSION} 套用完成"
-echo "繁體中文化與 SATA / SAS / RAID 硬碟偵測完成！"
-echo "SMART 正常為綠色；明確異常為紅色 FAIL；未回報健康狀態為橘色。"
-echo "請至瀏覽器按 [Ctrl + F5] 強制重新載入 PVE 節點摘要頁面。"
-echo "還原請執行：$sap restore"
-echo "========================================================="
+main
