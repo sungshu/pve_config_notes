@@ -84,7 +84,6 @@ mkdir -p "$backup_dir"
 [[ -d /etc/apt/sources.list.d ]] && cp -a /etc/apt/sources.list.d "$backup_dir/"
 echo "APT 設定備份：${backup_dir}"
 
-# PVE 9 使用 deb822。移除所有由本腳本管理的舊來源，避免重複與 enterprise 401。
 rm -f /etc/apt/sources.list
 rm -f /etc/apt/sources.list.d/debian.sources
 rm -f /etc/apt/sources.list.d/pve-enterprise.list
@@ -191,11 +190,41 @@ chmod 0755 "$disk_script"
 "$disk_script"
 
 echo "========================================================="
-echo "PVE 台灣化主機優化完成。"
-echo "Debian source：${DEBIAN_MIRROR}"
-echo "PVE source：pve-no-subscription"
-echo "完整升級：$([[ "$DO_UPGRADE" -eq 1 ]] && echo 已執行 || echo 未執行)"
-echo "Ceph source：$([[ "$ENABLE_CEPH" -eq 1 ]] && echo 已啟用 || echo 未啟用)"
+echo "PVE 台灣化主機優化完成"
+echo "========================================================="
+echo "已完成："
+echo "  [OK] Debian APT：TWDS mirror"
+echo "  [OK] Debian Security：security.debian.org"
+echo "  [OK] PVE APT：pve-no-subscription"
+echo "  [OK] Enterprise PVE／Ceph source：已清除"
+echo "  [OK] APT 重複來源：已清除"
+echo "  [OK] 時區：Asia/Taipei"
+echo "  [OK] 時間同步：Chrony"
+echo "  [OK] 監控工具：lm-sensors、smartmontools、nvme-cli、hdparm"
+echo "  [OK] 訂閱提示 Hook：已設定"
+echo "  [OK] Datacenter Tag：膠囊樣式＋字母排序"
+echo "  [OK] Node Summary：已套用繁體中文 CPU／硬碟監控"
+echo
+echo "完整系統升級：$([[ "$DO_UPGRADE" -eq 1 ]] && echo 已執行 || echo 尚未執行（預設略過）)"
+echo "Ceph Squid source：$([[ "$ENABLE_CEPH" -eq 1 ]] && echo 已啟用 || echo 尚未啟用)"
 echo "APT 設定備份：${backup_dir}"
-echo "請按 Ctrl+F5 重新載入 PVE 節點摘要頁面。"
+echo
+echo "下一步："
+echo "  1. 重新登入 PVE Web UI，按 Ctrl+F5 重新載入節點摘要頁面。"
+echo "  2. 檢查硬體監控："
+echo "     sensors"
+echo "     smartctl --scan-open"
+echo "     nvme list"
+echo
+echo "需要完整系統升級時："
+echo "  bash <(curl -fsSL ${REPOSITORY_RAW}/pve_config_notes.sh) -- --upgrade"
+echo
+echo "需要啟用 Ceph Squid no-subscription source 時："
+echo "  bash <(curl -fsSL ${REPOSITORY_RAW}/pve_config_notes.sh) -- --ceph"
+echo
+echo "重新套用硬體監控介面："
+echo "  bash <(curl -fsSL ${REPOSITORY_RAW}/pve_config_notes.sh) -- remod"
+echo
+echo "還原硬體監控介面："
+echo "  bash <(curl -fsSL ${REPOSITORY_RAW}/pve_config_notes.sh) -- restore"
 echo "========================================================="
