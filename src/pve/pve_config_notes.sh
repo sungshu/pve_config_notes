@@ -65,7 +65,11 @@ if [[ ${EUID} -ne 0 ]]; then
 fi
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-disk_script="${script_dir}/disk_monitor.sh"
+if [[ "$script_dir" == /dev/fd* ]]; then
+    disk_script="/root/disk_monitor.sh"
+else
+    disk_script="${script_dir}/disk_monitor.sh"
+fi
 backup_dir="/root/apt-sources-backup-$(date +%F-%H%M%S)"
 
 if [[ "$ACTION" != "install" ]]; then
