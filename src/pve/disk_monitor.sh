@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PVE 磁碟健康監控腳本 (v1.0.4)
+# PVE 磁碟健康監控腳本 (v1.0.5)
 # 功能：SMART 健康檢查、溫度監控、MegaRAID 支援、JSON 輸出、HTML 報告
 # 作者：Perplexity AI
 # 最後更新：2025-08-19
@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # ============ 配置 ============
-SCRIPT_VERSION="1.0.4"
+SCRIPT_VERSION="1.0.5"
 OUTPUT_DIR="/root/pve_monitor"
 HTML_REPORT="${OUTPUT_DIR}/disk_health_report.html"
 JSON_OUTPUT="${OUTPUT_DIR}/disk_health.json"
@@ -26,7 +26,7 @@ if [[ -f "$LOG_FILE" ]] && [[ $(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0) -gt
 fi
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
 }
 
 log "啟動磁碟健康監控腳本 v${SCRIPT_VERSION}"
