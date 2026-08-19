@@ -20,7 +20,7 @@
 # 選用內部 NTP：
 #   INTERNAL_NTP=192.168.0.100 ./pve_config_notes.sh
 set -Eeuo pipefail
-
+SCRIPT_VERSION="1.0.3"
 readonly DEBIAN_MIRROR="https://mirror.twds.com.tw/debian"
 readonly DEBIAN_SECURITY="https://security.debian.org/debian-security"
 readonly PVE_REPOSITORY="http://download.proxmox.com/debian/pve"
@@ -80,6 +80,7 @@ if [[ "$ACTION" != "install" ]]; then
     exec "$disk_script" "$ACTION"
 fi
 
+echo "pve_config_notes.sh v${SCRIPT_VERSION}"
 echo "腳本路徑：${script_dir}/$(basename "${BASH_SOURCE[0]}")"
 echo "=== [1/6] 備份並重建 APT 來源 ==="
 
@@ -187,14 +188,13 @@ if [[ -f /etc/pve/datacenter.cfg ]]; then
 fi
 
 echo "=== [6/6] 下載並套用繁體中文硬體監控介面 ==="
-if [[ ! -f "$disk_script" ]]; then
-    curl -fsSL "${REPOSITORY_RAW}/disk_monitor.sh" -o "$disk_script"
-fi
+curl -fsSL "${REPOSITORY_RAW}/disk_monitor.sh" -o "$disk_script"
 chmod 0755 "$disk_script"
 "$disk_script"
 
 echo "========================================================="
 echo "PVE 台灣化主機優化完成"
+echo "pve_config_notes.sh v${SCRIPT_VERSION} 執行完成"
 echo "========================================================="
 echo "已完成："
 echo "  [OK] Debian APT：TWDS mirror"
