@@ -281,8 +281,8 @@ fi
 
 echo "已加入 $nvi 顆 NVMe 硬碟"
 
-# 預先掃描 RAID 實體碟。若找到 MegaRAID，/dev/sd? 是其映射裝置，
-# 不應再以 SATA/SAS 一般模式加入，否則會與 RAID 實體碟重複。
+# 預先掃描 MegaRAID 實體碟。
+# 偵測到 MegaRAID 時，略過 /dev/sd? 一般掃描，避免同一批實體碟重複顯示。
 mapfile -t raidlines < <(
     smartctl --scan-open 2>/dev/null |
     sed -n -E 's#^(/dev/[a-zA-Z0-9/]+) -d megaraid,([0-9]+).*#\1 \2#p'
