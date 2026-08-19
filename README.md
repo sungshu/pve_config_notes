@@ -9,7 +9,8 @@ Proxmox VE / PBS 虛擬化實戰筆記本：記錄 PVE 系統摸稢、優化、�
 Ceph 儲存、PBS 備份、VMware 遷移評估等，摸到什麼就記錄什麼。
 
 - PVE 版本：9.2.10（Debian 13 Trixie）
-- 測試環境：AMD EPYC 雙路平台、NVMe（Dell BOSS-N1）、SAS HBA 直通、PERC H755 硬體 RAID
+- 測試主機：Dell PowerEdge R7625（雙路 AMD EPYC 9334 32-Core），NVMe（Dell
+  BOSS-N1）、SAS HBA 直通、PERC H755 硬體 RAID
 
 ## 目錄結構
 
