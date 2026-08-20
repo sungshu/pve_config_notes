@@ -77,23 +77,26 @@ INTERNAL_NTP=192.168.0.100 ./pve_config_notes.sh
 ### 單獨執行
 
 ```bash
-# 直接執行（套用監控介面）
-./disk_monitor.sh
-
-# 還原介面修改
-./disk_monitor.sh restore
-
-# 強制重套介面
-./disk_monitor.sh remod
+chmod +x disk_monitor.sh
+./disk_monitor.sh          # 套用修改
+./disk_monitor.sh restore  # 還原官方原始檔案
+./disk_monitor.sh remod    # 強制重新套用（先還原再套用）
 ```
 
 ### 更新
 
-`disk_monitor.sh` 通常由 `pve_config_notes.sh` 自動從 GitHub 下載並覆寫 `/root/disk_monitor.sh`。若要手動更新：
+從 GitHub 下載並覆蓋本地檔案：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sungshu/pve_config_notes/main/src/pve/disk_monitor.sh -o disk_monitor.sh
+chmod +x disk_monitor.sh
+```
+
+或覆蓋到 `/root/disk_monitor.sh`：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sungshu/pve_config_notes/main/src/pve/disk_monitor.sh -o /root/disk_monitor.sh
-chmod 0755 /root/disk_monitor.sh
+chmod +x /root/disk_monitor.sh
 ```
 
 ### 版本追蹤
@@ -101,7 +104,7 @@ chmod 0755 /root/disk_monitor.sh
 `disk_monitor.sh` 有 `SCRIPT_VERSION` 常數，執行時會顯示版本號。測試時需確認：
 
 1. 下載的 URL 正確
-2. `/root/disk_monitor.sh` 實際內容是目標版本
+2. 檔案實際內容是目標版本
 3. 執行時顯示的版本號與 GitHub 提交一致
 
 詳細說明請見 `硬體監控客製化.md`。
