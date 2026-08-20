@@ -85,7 +85,7 @@ chmod +x disk_monitor.sh
 
 ### 更新
 
-從 GitHub 下載並覆蓋本地檔案：
+從 GitHub 下載並覆蓋：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sungshu/pve_config_notes/main/src/pve/disk_monitor.sh -o disk_monitor.sh
