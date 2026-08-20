@@ -1,14 +1,29 @@
 #!/usr/bin/env bash
-# disk_monitor.sh v1.0.6
+# disk_monitor.sh
 # PVE Node Summary 繁體中文硬體監控：CPU 溫度/頻率 + NVMe/SATA/SAS/RAID 硬碟偵測
+#
+# 本腳本由 pve_config_notes.sh 呼叫，亦可獨立執行。
 #
 # 用法:
 #   ./disk_monitor.sh          套用修改
 #   ./disk_monitor.sh restore  還原官方原始檔案
 #   ./disk_monitor.sh remod    強制重新套用（先還原再套用）
+#
+# 開發背景：
+#   最初參考對岸開源專案 a904055262/PVE-manager-status 的 showtempcpufreq.sh，
+#   但該腳本沒有 SAS/RAID 分類、介面為簡體中文，且未驗證 PVE 9 相容性，
+#   因此改為完全自行開發，直接對應本機實際偵測到的硬碟數量動態產生區塊。
+#
+# 磁碟分類規則（執行時即時偵測，不使用背景快取）：
+#   1. smartctl --scan-open 找到 megaraid,N -> RAID 硬碟（實體碰）
+#   2. 型號含 PERC/MegaRAID/RAID          -> 視為 RAID virtual disk，跳過一般判斷
+#   3. TRAN=sata, rotational=0            -> SATA 固態硬碟
+#   4. TRAN=sata, rotational=1            -> SATA 傳統硬碟（可做 standby 判斷）
+#   5. TRAN=sas,  rotational=0            -> SAS 固態硬碟
+#   6. TRAN=sas,  rotational=1            -> SAS 傳統硬碟（不做 standby 判斷）
+#
+# 作者：sungshu 手札筆記本 (https://sungshu.github.io/)
 set -Eeuo pipefail
-
-SCRIPT_VERSION="1.0.6"
 
 sNVMEInfo=true
 sODisksInfo=true
@@ -25,7 +40,6 @@ np=/usr/share/perl5/PVE/API2/Nodes.pm
 pvejs=/usr/share/pve-manager/js/pvemanagerlib.js
 plibjs=/usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
 
-echo "disk_monitor.sh v${SCRIPT_VERSION}"
 echo "腳本路徑：$sap"
 
 if [[ ${EUID} -ne 0 ]]; then
@@ -206,10 +220,7 @@ cat > "$contentforpvejs" <<'SUB_EOF_JS'
     },
 SUB_EOF_JS
 
-#  \u5171\u7528 SMART \u72C0\u614B\u6E32\u67D3\u898F\u5247\u6703\u5BEB\u5165\u5404\u786C\u789F\u5340\u584A\uFF1A
-# true  = \u6B63\u5E38\uFF1Bfalse = FAIL\uFF1B\u672A\u63D0\u4F9B\u72C0\u614B = \u7121 SMART \u8CC7\u6599\u3002
-
-echo "\u6B63\u5728\u5075\u6E2C\u7CFB\u7D71 NVMe \u786C\u789F..."
+echo "正在偵測系統 NVMe 硬碟..."
 nvi=0
 
 if $sNVMEInfo; then
@@ -263,9 +274,7 @@ SUB_NVME_PL
                     let passed = v.smart_status?.passed;
                     let smart = passed === true
                         ? ' | SMART: <span style="color:#21ba45;font-weight:bold;">\u6B63\u5E38</span>'
-                        : passed === false
-                            ? ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>'
-                            : ' | SMART: <span style="color:#f0ad4e;font-weight:bold;">\u7121 SMART \u8CC7\u6599</span>';
+                        : ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>';
 
                     return model + temp + health + pot + rw + smart;
                 } catch(e) {
@@ -279,74 +288,64 @@ SUB_NVME_JS
     done
 fi
 
-echo "\u5DF2\u52A0\u5165 $nvi \u9846 NVMe \u786C\u789F"
+echo "已加入 $nvi 顆 NVMe 硬碟"
 
-# \u9810\u5148\u6383\u63CF RAID \u5BE6\u9AD4\u789F\u3002\u82E5\u627E\u5230 MegaRAID\uFF0C/dev/sd? \u662F\u5176\u6620\u5C04\u88DD\u7F6E\uFF0C
-# \u4E0D\u61C9\u518D\u4EE5 SATA/SAS \u4E00\u822C\u6A21\u5F0F\u52A0\u5165\uFF0C\u5426\u5247\u6703\u8207 RAID \u5BE6\u9AD4\u789F\u91CD\u8907\u3002
-mapfile -t raidlines < <(
-    smartctl --scan-open 2>/dev/null |
-    sed -n -E 's#^(/dev/[a-zA-Z0-9/]+) -d megaraid,([0-9]+).*#\1 \2#p'
-)
-
-echo "\u6B63\u5728\u5075\u6E2C SATA / SAS SSD \u8207 HDD..."
+echo "正在偵測 SATA / SAS SSD 與 HDD..."
 sdi=0
 
 if $sODisksInfo; then
-    if ((${#raidlines[@]} > 0)); then
-        echo "\u5075\u6E2C\u5230 MegaRAID\uFF0C\u7565\u904E\u4E00\u822C SATA/SAS \u6383\u63CF\u4EE5\u907F\u514D\u91CD\u8907\u986F\u793A"
-    else
-        for sd in /dev/sd?; do
-            [[ -b "$sd" ]] || continue
+    for sd in /dev/sd?; do
+        [[ -b "$sd" ]] || continue
 
-            sdsn="${sd##*/}"
-            sdcr="/sys/block/$sdsn/queue/rotational"
-            [[ -r "$sdcr" ]] || continue
+        sdsn="${sd##*/}"
+        sdcr="/sys/block/$sdsn/queue/rotational"
+        [[ -r "$sdcr" ]] || continue
 
-            sdmodel="$(lsblk -dn -o MODEL "$sd" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        sdmodel="$(lsblk -dn -o MODEL "$sd" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
-            if grep -Eqi 'PERC|MegaRAID|RAID' <<<"$sdmodel"; then
-                continue
-            fi
+        if grep -Eqi 'PERC|MegaRAID|RAID' <<<"$sdmodel"; then
+            continue
+        fi
 
-            sdtran="$(lsblk -dn -o TRAN "$sd" 2>/dev/null | tr -d '[:space:]')"
-            srota="$(cat "$sdcr")"
+        sdtran="$(lsblk -dn -o TRAN "$sd" 2>/dev/null | tr -d '[:space:]')"
+        srota="$(cat "$sdcr")"
 
-            case "$sdtran" in
-                sas)
-                    busname="SAS"
-                    smartopt="-d scsi"
-                    standbycheck=false
-                    ;;
-                sata|ata)
-                    busname="SATA"
-                    smartopt=""
-                    standbycheck=true
-                    ;;
-                usb)
-                    busname="USB"
-                    smartopt=""
-                    standbycheck=false
-                    ;;
-                *)
-                    busname=""
-                    smartopt="-d scsi"
-                    standbycheck=false
-                    ;;
-            esac
+        case "$sdtran" in
+            sas)
+                busname="SAS"
+                smartopt="-d scsi"
+                standbycheck=false
+                ;;
+            sata|ata)
+                busname="SATA"
+                smartopt=""
+                standbycheck=true
+                ;;
+            usb)
+                busname="USB"
+                smartopt=""
+                standbycheck=false
+                ;;
+            *)
+                busname=""
+                smartopt="-d scsi"
+                standbycheck=false
+                ;;
+        esac
 
-            if [[ -n "$busname" ]]; then
-                busprefix="${busname} "
-            else
-                busprefix=""
-            fi
+        if [[ -n "$busname" ]]; then
+            busprefix="${busname} "
+        else
+            busprefix=""
+        fi
 
-            if [[ "$srota" == "0" ]]; then
-                sdtype="${busprefix}\u56FA\u614B\u786C\u789F${sdi}"
-            else
-                sdtype="${busprefix}\u50B3\u7D71\u786C\u789F${sdi}"
-            fi
+        if [[ "$srota" == "0" ]]; then
+            sdtype="${busprefix}\u56FA\u614B\u786C\u789F${sdi}"
+        else
+            sdtype="${busprefix}\u50B3\u7D71\u786C\u789F${sdi}"
+        fi
 
-            cat >> "$contentfornp" <<SUB_SD_PL
+        cat >> "$contentfornp" <<SUB_SD_PL
     \$res->{sd$sdi} = \`
         if [ -b "$sd" ]; then
             if $standbycheck && hdparm -C "$sd" 2>/dev/null | grep -iq 'standby'; then
@@ -360,7 +359,7 @@ if $sODisksInfo; then
     \`;
 SUB_SD_PL
 
-            cat >> "$contentforpvejs" <<SUB_SD_JS
+        cat >> "$contentforpvejs" <<SUB_SD_JS
         {
             itemId: 'sd${sdi}0',
             colspan: 2,
@@ -388,9 +387,7 @@ SUB_SD_PL
                     let passed = v.smart_status?.passed;
                     let smart = passed === true
                         ? ' | SMART: <span style="color:#21ba45;font-weight:bold;">\u6B63\u5E38</span>'
-                        : passed === false
-                            ? ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>'
-                            : ' | SMART: <span style="color:#f0ad4e;font-weight:bold;">\u7121 SMART \u8CC7\u6599</span>';
+                        : ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>';
 
                     return model + temp + pot + smart;
                 } catch(e) {
@@ -400,21 +397,25 @@ SUB_SD_PL
         },
 SUB_SD_JS
 
-            ((++sdi))
-        done
-    fi
+        ((++sdi))
+    done
 fi
 
-echo "\u5DF2\u52A0\u5165 $sdi \u9846 SATA / SAS \u5BE6\u9AD4\u786C\u789F"
+echo "已加入 $sdi 顆 SATA / SAS 實體硬碟"
 
-echo "\u6B63\u5728\u5075\u6E2C PERC / MegaRAID \u5BE6\u9AD4\u786C\u789F..."
+echo "正在偵測 PERC / MegaRAID 實體硬碟..."
 raidi=0
 
 if $sRAIDInfo; then
+    mapfile -t raidlines < <(
+        smartctl --scan-open 2>/dev/null \
+        | sed -n -E 's#^(/dev/[a-zA-Z0-9/]+) -d megaraid,([0-9]+).*#\1 \2#p'
+    )
+
     if ((${#raidlines[@]} > 0)); then
         raidcontroller="$(
-            lsblk -dn -o MODEL /dev/sd? 2>/dev/null |
-            grep -Eim1 'PERC|MegaRAID|RAID' || true
+            lsblk -dn -o MODEL /dev/sd? 2>/dev/null \
+            | grep -Eim1 'PERC|MegaRAID|RAID' || true
         )"
 
         [[ -n "$raidcontroller" ]] || raidcontroller="PERC / MegaRAID"
@@ -454,9 +455,7 @@ SUB_RAID_PL
                     let passed = v.smart_status?.passed;
                     let smart = passed === true
                         ? ' | SMART: <span style="color:#21ba45;font-weight:bold;">\u6B63\u5E38</span>'
-                        : passed === false
-                            ? ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>'
-                            : ' | SMART: <span style="color:#f0ad4e;font-weight:bold;">\u7121 SMART \u8CC7\u6599</span>';
+                        : ' | SMART: <span style="color:#db2828;font-weight:bold;">FAIL</span>';
 
                     return model + temp + pot + smart;
                 } catch(e) {
@@ -471,14 +470,14 @@ SUB_RAID_JS
     fi
 fi
 
-echo "\u5DF2\u52A0\u5165 $raidi \u9846 RAID \u5BE6\u9AD4\u786C\u789F"
+echo "已加入 $raidi 顆 RAID 實體硬碟"
 
-echo "\u6B63\u5728\u5957\u7528\u5F8C\u7AEF Perl API \u4FEE\u6539..."
+echo "正在套用後端 Perl API 修改..."
 sed -i "/PVE::pvecfg::version_text()/{
     r $contentfornp
 }" "$np"
 
-echo "\u6B63\u5728\u5957\u7528\u524D\u7AEF JS \u4ECB\u9762\u4FEE\u6539..."
+echo "正在套用前端 JS 介面修改..."
 sed -i "/pveversion/,+3{
     /},/r $contentforpvejs
 }" "$pvejs"
@@ -513,9 +512,8 @@ sed -E -i '/\/nodes\/localhost\/subscription/,+15{
 systemctl restart pveproxy
 
 echo "========================================================="
-echo "disk_monitor.sh v${SCRIPT_VERSION} \u5957\u7528\u5B8C\u6210"
-echo "\u7E41\u9AD4\u4E2D\u6587\u5316\u8207 SATA / SAS / RAID \u786C\u789F\u5075\u6E2C\u5B8C\u6210\uFF01"
-echo "SMART \u6B63\u5E38\u70BA\u7DA0\u8272\uFF1B\u660E\u78BA\u7570\u5E38\u70BA\u7D05\u8272 FAIL\uFF1B\u672A\u5831\u544A\u5065\u5EB7\u72C0\u614B\u70BA\u6A58\u8272\u3002"
-echo "\u8ACB\u81F3\u700F\u89BD\u5668\u6309 [Ctrl + F5] \u5F37\u5236\u91CD\u65B0\u8F09\u5165 PVE \u7BC0\u9EDE\u6458\u8981\u9801\u9762\u3002"
-echo "\u9084\u539F\u8ACB\u57F7\u884C\uFF1A$sap restore"
+echo "繁體中文化與 SATA / SAS / RAID 硬碟偵測完成！"
+echo "SMART 正常為綠色，讀取失敗或異常為紅色 FAIL。"
+echo "請至瀏覽器按 [Ctrl + F5] 強制重新載入 PVE 節點摘要頁面。"
+echo "還原請執行：$sap restore"
 echo "========================================================="
