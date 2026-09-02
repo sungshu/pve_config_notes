@@ -15,12 +15,20 @@ Proxmox VE / PBS 虛擬化實戰筆記本：記錄 PVE 系統摸索、優化、�
 ```text
 pve_config_notes/
 ├── img/
+│   ├── pve/
+│   │   ├── ceph/
+│   │   ├── pbs/
+│   │   └── monitor/
+│   └── vmware/
 └── src/
     ├── pve/
     │   ├── pve_config_notes.sh
-    │   ├── disk_monitor.sh
     │   ├── 系統初始化與優化.md
-    │   └── 硬體監控客製化.md
+    │   ├── ceph/
+    │   ├── pbs/
+    │   └── monitor/
+    │       ├── disk_monitor.sh
+    │       └── 硬體監控客製化.md
     ├── ceph/
     ├── pbs/
     └── vmware/
@@ -29,7 +37,7 @@ pve_config_notes/
 ## PVE 系統
 
 - [系統初始化與優化](src/pve/系統初始化與優化.md)
-- [硬體監控客製化](src/pve/硬體監控客製化.md)
+- [硬體監控客製化](src/pve/monitor/硬體監控客製化.md)
 - [PVE 腳本與硬體監控說明](src/pve/README.md)
 
 ### disk_monitor.sh v1.0.52
@@ -51,7 +59,7 @@ pve_config_notes/
 GitHub 更新後可直接下載最新版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sungshu/pve_config_notes/main/src/pve/disk_monitor.sh -o /root/disk_monitor.sh
+curl -fsSL https://raw.githubusercontent.com/sungshu/pve_config_notes/main/src/pve/monitor/disk_monitor.sh -o /root/disk_monitor.sh
 chmod +x /root/disk_monitor.sh
 ```
 
