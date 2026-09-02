@@ -1,32 +1,37 @@
-# PVE 系統初始化與硬體監控腳本
+# PVE 系統初始化與硬體監控
 
-Proxmox VE 9（Debian 13 Trixie）台灣環境主機優化與硬體監控安裝腳本。
+Proxmox VE 9（Debian 13 Trixie）台灣環境主機優化與硬體監控專案。
 
 ## 倉庫結構
 
 ```text
 src/pve/
-├── pve_config_notes.sh    # 入口腳本：系統初始化與優化
-├── disk_monitor.sh        # v1.0.52：PVE Summary 繁體中文硬體監控
+├── pve_config_notes.sh          # 系統初始化與優化入口
 ├── 系統初始化與優化.md
-└── 硬體監控客製化.md
+├── ceph/
+├── pbs/
+└── monitor/
+    ├── disk_monitor.sh          # v1.0.52 PVE 硬體監控
+    └── 硬體監控客製化.md
 
 img/pve/
-└── PVE 硬體監控實機更新前／更新後與驗證截圖
+├── ceph/
+├── pbs/
+└── monitor/                     # PVE 硬體監控實機截圖
 ```
 
 ## disk_monitor.sh v1.0.52
 
 **2026-09-01 正式版，實機測試完成。**
 
-本版本將 CPU、CPU 溫度、網卡溫度、NVMe、SATA/SAS、MegaRAID Physical Disk 等硬體資訊整合到 PVE Node Summary，並使用背景 runtime 採集，避免在 PVE API request 中直接執行硬體掃描。
+本版本將 CPU、CPU 溫度、網卡溫度、NVMe、SATA/SAS、MegaRAID Physical Disk 等硬體資訊整合到 PVE Node Summary，並使用背景 runtime 採集，避免在 PVE API request 中直接執行完整硬體掃描。
 
-### 保留功能
+### 主要功能
 
 - CPU 即時頻率、平均／最低／最高頻率與 governor
 - CPU package `PkgWatt`
-- 雙 CPU / 多 CPU 溫度分行
-- 網卡溫度自動標示 `網卡1`、`網卡2`……
+- 多 CPU / 多插槽溫度分行
+- 網卡溫度自動整理
 - NVMe SMART、溫度、健康度、通電時數、讀寫 TB
 - SATA / SAS SSD 與 HDD 分類
 - MegaRAID Physical Disk 與一般 `/dev/sdX` 自動分流
@@ -37,65 +42,72 @@ img/pve/
 - PVE 官方檔案版本化備份與 restore
 - `install`、`collect`、`restore`、`remod`
 
-### 使用
+### 從 GitHub 取得正式版
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/sungshu/pve_config_notes/main/src/pve/monitor/disk_monitor.sh -o /root/disk_monitor.sh
 chmod +x /root/disk_monitor.sh
+```
+
+### 安裝
+
+```bash
 /root/disk_monitor.sh
 ```
 
-背景採集：
+### 背景採集
 
 ```bash
 /root/disk_monitor.sh collect
 ```
 
-重新套用：
+### 重新套用 UI
 
 ```bash
 /root/disk_monitor.sh remod
 ```
 
-還原官方 UI：
+### 還原官方 UI
 
 ```bash
 /root/disk_monitor.sh restore
-```
-
-### 從 GitHub 更新
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sungshu/pve_config_notes/main/src/pve/disk_monitor.sh -o /root/disk_monitor.sh
-chmod +x /root/disk_monitor.sh
 ```
 
 套用完成後，瀏覽器執行 **Ctrl + F5**。
 
 ## 實機更新紀錄
 
-本次 v1.0.52 已完成實機驗證，並保留更新前、更新後及後續驗證截圖。
+本次 v1.0.52 已完成實機驗證，並保留更新前、更新後以及重新部署／驗證的實際畫面。
 
 ### 更新前
 
-![Node1 更新前](../../img/pve/更新前node1_2026-09-01%20163510.png)
+![Node1 更新前](../../img/pve/monitor/更新前node1_2026-09-01%20163510.png)
 
-![Node5 更新前](../../img/pve/更新前node5_2026-09-01%20163530.png)
+![Node5 更新前](../../img/pve/monitor/更新前node5_2026-09-01%20163530.png)
 
 ### 更新後
 
-![Node1 更新後](../../img/pve/更新後node1_2026-09-01%20163103.png)
+![Node1 更新後](../../img/pve/monitor/更新後node1_2026-09-01%20163103.png)
 
-![Node5 更新後](../../img/pve/更新後node5-1%202026-09-01%20163110.png)
+![Node5 更新後](../../img/pve/monitor/更新後node5-1%202026-09-01%20163110.png)
 
-![Node5 更新後詳細畫面](../../img/pve/更新後node5-2_2026-09-01%20163123.png)
+![Node5 更新後詳細畫面](../../img/pve/monitor/更新後node5-2_2026-09-01%20163123.png)
 
-### 後續驗證截圖
+### 實際重新部署／驗證
 
-`img/pve/` 另保留 Node1 / Node5 的後續實機驗證畫面，作為部署完成後的操作紀錄。
+以下畫面為正式版完成後，實際重新執行 `disk_monitor.sh` 安裝流程所留下的操作紀錄，不是示意圖。
 
-完整的安裝流程、Hook 架構、背景採集、更新前後比較與維護方式請參閱：
+![Node1 實際部署畫面](../../img/pve/monitor/node1-1_2026-09-02%20085638.png)
 
-**[硬體監控客製化.md](./硬體監控客製化.md)**
+![Node1 實際部署畫面 2](../../img/pve/monitor/node1-2_2026-09-02%20085646.png)
+
+![Node5 實際部署畫面](../../img/pve/monitor/node5-1_2026-09-02%20085618.png)
+
+![Node5 實際部署畫面 2](../../img/pve/monitor/node5-2_2026-09-02%20085626.png)
+
+完整的安裝流程、硬體採集架構、PVE API / 前端 Hook、官方檔案備份、PVE 升級後處理與實機驗證說明，請參閱：
+
+**[硬體監控客製化.md](./monitor/硬體監控客製化.md)**
 
 ## pve_config_notes.sh
 
@@ -117,7 +129,7 @@ chmod +x /root/disk_monitor.sh
 
 ## 完成後操作
 
-執行完成後，按 **Ctrl + F5** 重新載入 PVE 節點摘要頁面。
+執行完成後，按 **Ctrl + F5** 重新載入 PVE 節點摘要頁面，確認 CPU、溫度、NVMe、SATA/SAS 與 RAID Physical Disk 資訊。
 
 ## 作者
 
