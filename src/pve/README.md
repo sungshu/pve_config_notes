@@ -10,11 +10,16 @@ src/pve/
 ├── disk_monitor.sh        # v1.0.52：PVE Summary 繁體中文硬體監控
 ├── 系統初始化與優化.md
 └── 硬體監控客製化.md
+
+img/pve/
+└── PVE 硬體監控實機更新前／更新後與驗證截圖
 ```
 
 ## disk_monitor.sh v1.0.52
 
-2026-09-01 正式版，基於目前 PVE 實機已確認正常顯示的版本。
+**2026-09-01 正式版，實機測試完成。**
+
+本版本將 CPU、CPU 溫度、網卡溫度、NVMe、SATA/SAS、MegaRAID Physical Disk 等硬體資訊整合到 PVE Node Summary，並使用背景 runtime 採集，避免在 PVE API request 中直接執行硬體掃描。
 
 ### 保留功能
 
@@ -35,11 +40,26 @@ src/pve/
 ### 使用
 
 ```bash
-chmod +x disk_monitor.sh
-./disk_monitor.sh
-./disk_monitor.sh collect
-./disk_monitor.sh restore
-./disk_monitor.sh remod
+chmod +x /root/disk_monitor.sh
+/root/disk_monitor.sh
+```
+
+背景採集：
+
+```bash
+/root/disk_monitor.sh collect
+```
+
+重新套用：
+
+```bash
+/root/disk_monitor.sh remod
+```
+
+還原官方 UI：
+
+```bash
+/root/disk_monitor.sh restore
 ```
 
 ### 從 GitHub 更新
@@ -50,6 +70,32 @@ chmod +x /root/disk_monitor.sh
 ```
 
 套用完成後，瀏覽器執行 **Ctrl + F5**。
+
+## 實機更新紀錄
+
+本次 v1.0.52 已完成實機驗證，並保留更新前、更新後及後續驗證截圖。
+
+### 更新前
+
+![Node1 更新前](../../img/pve/更新前node1_2026-09-01%20163510.png)
+
+![Node5 更新前](../../img/pve/更新前node5_2026-09-01%20163530.png)
+
+### 更新後
+
+![Node1 更新後](../../img/pve/更新後node1_2026-09-01%20163103.png)
+
+![Node5 更新後](../../img/pve/更新後node5-1%202026-09-01%20163110.png)
+
+![Node5 更新後詳細畫面](../../img/pve/更新後node5-2_2026-09-01%20163123.png)
+
+### 後續驗證截圖
+
+`img/pve/` 另保留 Node1 / Node5 的後續實機驗證畫面，作為部署完成後的操作紀錄。
+
+完整的安裝流程、Hook 架構、背景採集、更新前後比較與維護方式請參閱：
+
+**[硬體監控客製化.md](./硬體監控客製化.md)**
 
 ## pve_config_notes.sh
 
