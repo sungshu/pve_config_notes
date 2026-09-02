@@ -81,29 +81,29 @@ chmod +x /root/disk_monitor.sh
 
 ### 更新前
 
-![Node1 更新前](../../img/pve/monitor/更新前node1_2026-09-01%20163510.png)
+![Node1 更新前](../../../img/pve/monitor/更新前node1_2026-09-01%20163510.png)
 
-![Node5 更新前](../../img/pve/monitor/更新前node5_2026-09-01%20163530.png)
+![Node5 更新前](../../../img/pve/monitor/更新前node5_2026-09-01%20163530.png)
 
 ### 更新後
 
-![Node1 更新後](../../img/pve/monitor/更新後node1_2026-09-01%20163103.png)
+![Node1 更新後](../../../img/pve/monitor/更新後node1_2026-09-01%20163103.png)
 
-![Node5 更新後](../../img/pve/monitor/更新後node5-1%202026-09-01%20163110.png)
+![Node5 更新後](../../../img/pve/monitor/更新後node5-1%202026-09-01%20163110.png)
 
-![Node5 更新後詳細畫面](../../img/pve/monitor/更新後node5-2_2026-09-01%20163123.png)
+![Node5 更新後詳細畫面](../../../img/pve/monitor/更新後node5-2_2026-09-01%20163123.png)
 
 ### 實際重新部署／驗證
 
 以下畫面為正式版完成後，實際重新執行 `disk_monitor.sh` 安裝流程所留下的操作紀錄，不是示意圖。
 
-![Node1 實際部署畫面](../../img/pve/monitor/node1-1_2026-09-02%20085638.png)
+![Node1 實際部署畫面](../../../img/pve/monitor/node1-1_2026-09-02%20085638.png)
 
-![Node1 實際部署畫面 2](../../img/pve/monitor/node1-2_2026-09-02%20085646.png)
+![Node1 實際部署畫面 2](../../../img/pve/monitor/node1-2_2026-09-02%20085646.png)
 
-![Node5 實際部署畫面](../../img/pve/monitor/node5-1_2026-09-02%20085618.png)
+![Node5 實際部署畫面](../../../img/pve/monitor/node5-1_2026-09-02%20085618.png)
 
-![Node5 實際部署畫面 2](../../img/pve/monitor/node5-2_2026-09-02%20085626.png)
+![Node5 實際部署畫面 2](../../../img/pve/monitor/node5-2_2026-09-02%20085626.png)
 
 完整的安裝流程、硬體採集架構、PVE API / 前端 Hook、官方檔案備份、PVE 升級後處理與實機驗證說明，請參閱：
 
